@@ -1,8 +1,11 @@
 using GhostfolioSidekick.Configuration;
+using Moomoo.OpenApi;
+using Moomoo.OpenApi.Pb;
+using System.Reflection;
 
 namespace GhostfolioSidekick.Parsers.Moomoo
 {
-	public sealed class MoomooSdkClient : IMoomooClient, MMSPI_Trd, MMSPI_Conn
+	public sealed class MoomooSdkClient : IMoomooClient
 	{
 		private static readonly object ApiInitializationLock = new();
 		private static bool apiInitialized;
@@ -50,8 +53,8 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 				accountListSequence = 0;
 				api = new MMAPI_Trd();
 				api.SetClientInfo("GhostfolioSidekick", 1);
-				api.SetConnCallback(this);
-				api.SetTrdCallback(this);
+				api.SetConnCallback(CreateProxy<MMSPI_Conn>(ProcessConnectionCallback));
+				api.SetTrdCallback(CreateProxy<MMSPI_Trd>(ProcessTradeCallback));
 				tradeApi = api;
 			}
 
@@ -84,58 +87,110 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 			}
 		}
 
-		public void OnInitConnect(MMAPI_Conn client, long errCode, string desc)
+		public ValueTask DisposeAsync()
+		{
+			if (disposed)
+			{
+				return ValueTask.CompletedTask;
+			}
+
+			disposed = true;
+			CloseConnection();
+			GC.SuppressFinalize(this);
+			return ValueTask.CompletedTask;
+		}
+
+		private void ProcessConnectionCallback(string method, object?[] args)
 		{
 			TaskCompletionSource<MoomooHealthResult>? completionSource;
+			lock (stateLock)
+			{
+				completionSource = healthCompletionSource;
+			}
+
+			if (completionSource == null)
+			{
+				return;
+			}
+
+			if (method == nameof(MMSPI_Conn.OnInitConnect))
+			{
+				long errorCode = args.Length > 1 && args[1] is long code ? code : -1;
+				string description = args.Length > 2 ? args[2]?.ToString() ?? string.Empty : string.Empty;
+
+				if (errorCode != 0)
+				{
+					completionSource.TrySetResult(new MoomooHealthResult(false, false, 0, BuildConnectionError(errorCode, description)));
+					return;
+				}
+
+				RequestAccountList();
+				return;
+			}
+
+			if (method == nameof(MMSPI_Conn.OnDisconnect))
+			{
+				long errorCode = args.Length > 1 && args[1] is long code ? code : -1;
+				completionSource.TrySetResult(
+					new MoomooHealthResult(false, false, 0, $"OpenD disconnected before the health check completed (code {errorCode})."));
+			}
+		}
+
+		private void ProcessTradeCallback(string method, object?[] args)
+		{
+			if (method != nameof(MMSPI_Trd.OnReply_GetAccList) || args.Length < 3)
+			{
+				return;
+			}
+
+			if (args[1] is not uint serialNo || args[2] is not TrdGetAccList.Response response)
+			{
+				return;
+			}
+
+			HandleAccountList(serialNo, response);
+		}
+
+		private void RequestAccountList()
+		{
 			MMAPI_Trd? api;
-
-			lock (stateLock)
-			{
-				completionSource = healthCompletionSource;
-				api = tradeApi;
-			}
-
-			if (completionSource == null || api == null)
-			{
-				return;
-			}
-
-			if (errCode != 0)
-			{
-				completionSource.TrySetResult(new MoomooHealthResult(false, false, 0, BuildConnectionError(errCode, desc)));
-				return;
-			}
-
-			TrdGetAccList.C2S c2s = TrdGetAccList.C2S.CreateBuilder()
-				.SetUserID(0)
-				.SetTrdCategory((int)TrdCommon.TrdCategory.TrdCategory_Security)
-				.SetNeedGeneralSecAccount(true)
-				.Build();
-
-			TrdGetAccList.Request request = TrdGetAccList.Request.CreateBuilder()
-				.SetC2S(c2s)
-				.Build();
-
-			uint sequence = api.GetAccList(request);
-			lock (stateLock)
-			{
-				accountListSequence = sequence;
-			}
-		}
-
-		public void OnDisconnect(MMAPI_Conn client, long errCode)
-		{
 			TaskCompletionSource<MoomooHealthResult>? completionSource;
 			lock (stateLock)
 			{
+				api = tradeApi;
 				completionSource = healthCompletionSource;
 			}
 
-			completionSource?.TrySetResult(
-				new MoomooHealthResult(false, false, 0, $"OpenD disconnected before the health check completed (code {errCode})."));
+			if (api == null || completionSource == null)
+			{
+				return;
+			}
+
+			try
+			{
+				TrdGetAccList.C2S c2s = TrdGetAccList.C2S.CreateBuilder()
+					.SetTrdCategory((int)TrdCommon.TrdCategory.TrdCategory_Security)
+					.SetNeedGeneralSecAccount(true)
+					.Build();
+
+				TrdGetAccList.Request request = TrdGetAccList.Request.CreateBuilder()
+					.SetC2S(c2s)
+					.Build();
+
+				uint sequence = api.GetAccList(request);
+				lock (stateLock)
+				{
+					accountListSequence = sequence;
+				}
+			}
+			catch (Exception ex)
+			{
+				completionSource.TrySetResult(
+					new MoomooHealthResult(true, false, 0, $"OpenD account discovery could not be started: {ex.Message}"));
+			}
 		}
 
-		public void OnReply_GetAccList(MMAPI_Conn client, uint serialNo, TrdGetAccList.Response response)
+		private void HandleAccountList(uint serialNo, TrdGetAccList.Response response)
 		{
 			TaskCompletionSource<MoomooHealthResult>? completionSource;
 			uint expectedSequence;
@@ -146,7 +201,7 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 				expectedSequence = accountListSequence;
 			}
 
-			if (completionSource == null || serialNo != expectedSequence)
+			if (completionSource == null || (expectedSequence != 0 && serialNo != expectedSequence))
 			{
 				return;
 			}
@@ -173,19 +228,6 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 						: "OpenD is reachable, but no REAL securities account was returned."));
 		}
 
-		public ValueTask DisposeAsync()
-		{
-			if (disposed)
-			{
-				return ValueTask.CompletedTask;
-			}
-
-			disposed = true;
-			CloseConnection();
-			GC.SuppressFinalize(this);
-			return ValueTask.CompletedTask;
-		}
-
 		private void CloseConnection()
 		{
 			MMAPI_Trd? api;
@@ -196,6 +238,14 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 			}
 
 			api?.Close();
+		}
+
+		private static T CreateProxy<T>(Action<string, object?[]> handler)
+			where T : class
+		{
+			T proxy = DispatchProxy.Create<T, MoomooSpiProxy>();
+			((MoomooSpiProxy)(object)proxy).Handler = handler;
+			return proxy;
 		}
 
 		private static string BuildConnectionError(long errCode, string description)
@@ -217,6 +267,21 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 				MMAPI.Init();
 				apiInitialized = true;
 			}
+		}
+	}
+
+	internal class MoomooSpiProxy : DispatchProxy
+	{
+		public Action<string, object?[]>? Handler { get; set; }
+
+		protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+		{
+			if (targetMethod != null)
+			{
+				Handler?.Invoke(targetMethod.Name, args ?? []);
+			}
+
+			return null;
 		}
 	}
 }
