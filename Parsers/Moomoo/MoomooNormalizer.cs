@@ -16,6 +16,7 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 			ArgumentNullException.ThrowIfNull(cashBalances);
 
 			Dictionary<string, List<PartialActivity>> activitiesByAccount = [];
+			List<MoomooCashBalance> materializedCashBalances = [.. cashBalances];
 
 			foreach (var trade in trades)
 			{
@@ -49,14 +50,14 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 				}
 			}
 
-			if (cashBalances.Any())
+			if (materializedCashBalances.Count > 0)
 			{
 				if (string.IsNullOrWhiteSpace(configuration.CashAndFundsAccount))
 				{
 					throw new InvalidOperationException("Moomoo cash balances were returned but no cash-and-funds-account is configured.");
 				}
 
-				foreach (var balance in cashBalances)
+				foreach (var balance in materializedCashBalances)
 				{
 					Currency currency = Currency.GetCurrency(balance.Currency);
 					PartialActivity knownBalance = PartialActivity.CreateKnownBalance(currency, balance.Date, balance.Amount);
@@ -132,7 +133,7 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 			return market switch
 			{
 				"US" => symbol,
-				"HK" => $"{symbol.PadLeft(4, '0')}.HK",
+				"HK" => $"{NormalizeHongKongTicker(symbol)}.HK",
 				"MY" => $"{symbol}.KL",
 				"SG" => $"{symbol}.SI",
 				"JP" => $"{symbol}.T",
@@ -142,6 +143,17 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 				"SZ" => $"{symbol}.SZ",
 				_ => symbol
 			};
+		}
+
+		private static string NormalizeHongKongTicker(string symbol)
+		{
+			string withoutLeadingZeros = symbol.TrimStart('0');
+			if (withoutLeadingZeros.Length == 0)
+			{
+				withoutLeadingZeros = "0";
+			}
+
+			return withoutLeadingZeros.PadLeft(4, '0');
 		}
 
 		private static void Add(Dictionary<string, List<PartialActivity>> activitiesByAccount, string accountName, PartialActivity activity)
