@@ -4,13 +4,14 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 {
 	public interface IMoomooClient : IAsyncDisposable
 	{
-		Task<MoomooSnapshot> GetSnapshot(
+		Task<MoomooHealthResult> CheckHealth(
 			MoomooConfiguration configuration,
-			DateTime from,
 			CancellationToken cancellationToken = default);
 	}
 
-	public sealed record MoomooSnapshot(
-		IReadOnlyCollection<MoomooTrade> Trades,
-		IReadOnlyCollection<MoomooCashBalance> CashBalances);
+	public sealed record MoomooHealthResult(
+		bool Connected,
+		bool RealAccountDetected,
+		int RealAccountCount,
+		string? Message = null);
 }
