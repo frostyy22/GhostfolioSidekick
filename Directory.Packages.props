@@ -55,6 +55,7 @@
 		<PackageVersion Include="Microsoft.TypeScript.MSBuild" Version="7.0.1" />
 		<PackageVersion Include="Moq" Version="4.20.72" />
 		<PackageVersion Include="Moq.EntityFrameworkCore" Version="10.0.0.2" />
+		<PackageVersion Include="moomoo-api" Version="10.10.7008" />
 		<PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
 		<PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
 		<PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
