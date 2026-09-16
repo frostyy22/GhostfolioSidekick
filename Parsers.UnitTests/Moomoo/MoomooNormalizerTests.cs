@@ -63,7 +63,7 @@ namespace GhostfolioSidekick.Parsers.UnitTests.Moomoo
 
 		[Theory]
 		[InlineData("US.TEST", "TEST")]
-		[InlineData("HK.700", "0700.HK")]
+		[InlineData("HK.00700", "0700.HK")]
 		[InlineData("MY.1234", "1234.KL")]
 		[InlineData("SG.TEST", "TEST.SI")]
 		[InlineData("JP.1234", "1234.T")]
@@ -82,7 +82,7 @@ namespace GhostfolioSidekick.Parsers.UnitTests.Moomoo
 			var configuration = CreateConfiguration();
 			var trade = new MoomooTrade(
 				"synthetic-order-002",
-				"HK.700",
+				"HK.00700",
 				MoomooTradeSide.Sell,
 				1,
 				100m,
