@@ -5,7 +5,8 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 	public sealed class MoomooSdkClient : IMoomooClient, MMSPI_Trd, MMSPI_Conn
 	{
 		private static readonly object ApiInitializationLock = new();
-		private static int apiUserCount;
+		private static bool apiInitialized;
+		private static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(10);
 
 		private readonly object stateLock = new();
 		private MMAPI_Trd? tradeApi;
@@ -15,7 +16,7 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 
 		public MoomooSdkClient()
 		{
-			AcquireApi();
+			EnsureApiInitialized();
 		}
 
 		public async Task<MoomooHealthResult> CheckHealth(
@@ -36,6 +37,7 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 			}
 
 			TaskCompletionSource<MoomooHealthResult> completionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+			MMAPI_Trd api;
 
 			lock (stateLock)
 			{
@@ -46,24 +48,30 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 
 				healthCompletionSource = completionSource;
 				accountListSequence = 0;
-				tradeApi = new MMAPI_Trd();
-				tradeApi.SetClientInfo("GhostfolioSidekick", 1);
-				tradeApi.SetConnCallback(this);
-				tradeApi.SetTrdCallback(this);
+				api = new MMAPI_Trd();
+				api.SetClientInfo("GhostfolioSidekick", 1);
+				api.SetConnCallback(this);
+				api.SetTrdCallback(this);
+				tradeApi = api;
 			}
-
-			using CancellationTokenRegistration registration = cancellationToken.Register(() =>
-				completionSource.TrySetCanceled(cancellationToken));
 
 			try
 			{
-				bool started = tradeApi.InitConnect(configuration.Host, checked((ushort)configuration.Port), false);
+				bool started = api.InitConnect(configuration.Host, checked((ushort)configuration.Port), false);
 				if (!started)
 				{
 					return new MoomooHealthResult(false, false, 0, "OpenD connection attempt could not be started.");
 				}
 
-				return await completionSource.Task.ConfigureAwait(false);
+				Task timeoutTask = Task.Delay(HealthTimeout, cancellationToken);
+				Task completedTask = await Task.WhenAny(completionSource.Task, timeoutTask).ConfigureAwait(false);
+				if (completedTask == completionSource.Task)
+				{
+					return await completionSource.Task.ConfigureAwait(false);
+				}
+
+				cancellationToken.ThrowIfCancellationRequested();
+				return new MoomooHealthResult(false, false, 0, $"OpenD health check timed out after {HealthTimeout.TotalSeconds:0} seconds.");
 			}
 			finally
 			{
@@ -174,7 +182,6 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 
 			disposed = true;
 			CloseConnection();
-			ReleaseApi();
 			GC.SuppressFinalize(this);
 			return ValueTask.CompletedTask;
 		}
@@ -198,27 +205,17 @@ namespace GhostfolioSidekick.Parsers.Moomoo
 				: $"Unable to connect to OpenD (code {errCode}): {description}";
 		}
 
-		private static void AcquireApi()
+		private static void EnsureApiInitialized()
 		{
 			lock (ApiInitializationLock)
 			{
-				if (apiUserCount == 0)
+				if (apiInitialized)
 				{
-					MMAPI.Init();
+					return;
 				}
-				apiUserCount++;
-			}
-		}
 
-		private static void ReleaseApi()
-		{
-			lock (ApiInitializationLock)
-			{
-				apiUserCount--;
-				if (apiUserCount == 0)
-				{
-					MMAPI.UnInit();
-				}
+				MMAPI.Init();
+				apiInitialized = true;
 			}
 		}
 	}
