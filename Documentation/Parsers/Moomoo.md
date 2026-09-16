@@ -36,6 +36,29 @@ The example below is a template. Replace every value wrapped in angle brackets b
 
 The referenced GhostfolioSidekick accounts should also be defined in the normal `accounts` configuration section.
 
+## Phase 1: OpenD health check
+
+Phase 1 only checks that Sidekick can connect to OpenD and that OpenD returns at least one REAL securities account. It does not read transactions, balances, positions, funds, or fees.
+
+A one-shot health-check tool is included for deployment validation:
+
+```bash
+dotnet run --project Tools/MoomooHealthCheck/MoomooHealthCheck.csproj -- <OPEND_HOST> <OPEND_PORT>
+```
+
+Successful output is JSON and intentionally excludes brokerage account IDs:
+
+```json
+{
+  "Connected": true,
+  "RealAccountDetected": true,
+  "RealAccountCount": 1,
+  "Message": "OpenD is reachable and at least one REAL securities account is available."
+}
+```
+
+The command exits with code `0` only when OpenD is reachable and at least one REAL securities account is detected. This structured result can also be consumed by an external health dashboard without duplicating OpenD account-discovery logic.
+
 ## Data model
 
 Moomoo order identifiers are retained as the stable transaction identity used by the importer.
@@ -93,6 +116,13 @@ The integration is intended for read-only portfolio synchronization. It should n
 
 ## Current implementation status
 
-The configuration contract and SDK-neutral normalization layer are implemented first so they can be tested without a live brokerage account.
+Phase 1 is implemented:
 
-The OpenD transport layer will map official Moomoo API responses into these normalized records and remain isolated from the Ghostfolio-specific synchronization logic.
+- official `moomoo-api` SDK dependency
+- configurable OpenD host and port
+- connection callback handling
+- REAL securities-account discovery
+- bounded health-check timeout
+- one-shot JSON health runner
+
+Transaction, cash, fund, fee, and position retrieval are intentionally deferred to later phases.
