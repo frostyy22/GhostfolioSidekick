@@ -20,6 +20,9 @@ namespace GhostfolioSidekick.Configuration
 		[JsonPropertyName("accounts")]
 		public AccountConfiguration[]? Accounts { get; set; }
 
+		[JsonPropertyName("moomoo")]
+		public MoomooConfiguration[]? Moomoo { get; set; }
+
 		[JsonPropertyName("mappings")]
 		public Mapping[]? Mappings { get; set; }
 
